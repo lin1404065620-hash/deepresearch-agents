@@ -1,0 +1,544 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="DeepAgents 多智能体协作工作台">
+    <title>多智能体协作工作台</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/font-awesome@4.7.0/css/font-awesome.min.css">
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        ocean: { 50: '#f2f7fc', 100: '#e4eef8', 500: '#1686d9', 600: '#0f6cbd', 700: '#15558a', 900: '#12263f', 950: '#0b1a2b' }
+                    },
+                    boxShadow: { panel: '0 12px 34px rgba(18, 38, 63, .08)' }
+                }
+            }
+        };
+    </script>
+    <style>
+        * { scrollbar-width: thin; scrollbar-color: #cbd5e1 transparent; }
+        body { font-family: Inter, "Microsoft YaHei", "PingFang SC", sans-serif; }
+        .safe-area-bottom { padding-bottom: max(1rem, env(safe-area-inset-bottom)); }
+        .message-text { white-space: pre-wrap; overflow-wrap: anywhere; }
+        .drawer-open { display: flex !important; position: fixed; inset-block: 0; z-index: 50; box-shadow: 0 24px 48px rgba(15, 23, 42, .28); }
+        .timeline-line::before { content: ''; position: absolute; left: .37rem; top: 1rem; bottom: -1rem; width: 1px; background: #dbe5ef; }
+        .timeline-line:last-child::before { display: none; }
+        .pulse-dot { animation: pulse-dot 1.8s ease-in-out infinite; }
+        @keyframes pulse-dot { 0%,100% { opacity:.45; transform:scale(.85) } 50% { opacity:1; transform:scale(1.08) } }
+        @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration:.01ms !important; scroll-behavior:auto !important; } }
+    </style>
+</head>
+<body class="h-screen overflow-hidden bg-slate-100 text-slate-800 antialiased">
+    <div id="mobile-overlay" class="fixed inset-0 z-40 hidden bg-slate-950/35 backdrop-blur-sm md:hidden" aria-hidden="true"></div>
+
+    <div class="flex h-full">
+        <aside id="session-sidebar" class="hidden w-[280px] shrink-0 flex-col bg-ocean-950 text-white md:flex">
+            <div class="flex h-20 items-center gap-3 border-b border-white/10 px-5">
+                <div class="grid h-11 w-11 place-items-center rounded-2xl bg-sky-400 text-ocean-950 shadow-lg shadow-sky-950/20">
+                    <i class="fa fa-sitemap text-lg" aria-hidden="true"></i>
+                </div>
+                <div><div class="text-base font-bold tracking-wide">DeepAgents</div><div class="text-xs text-slate-400">智能协作中心</div></div>
+                <button data-close-drawer="session-sidebar" class="ml-auto rounded-lg p-2 text-slate-400 hover:bg-white/10 md:hidden" aria-label="关闭会话栏"><i class="fa fa-times"></i></button>
+            </div>
+
+            <div class="px-4 pt-5">
+                <button id="new-session-button" class="flex w-full items-center justify-center gap-2 rounded-xl bg-sky-400 px-4 py-3 text-sm font-semibold text-ocean-950 shadow-lg shadow-sky-950/25 transition hover:bg-sky-300 focus:outline-none focus:ring-2 focus:ring-sky-200">
+                    <i class="fa fa-plus" aria-hidden="true"></i> 新建会话
+                </button>
+            </div>
+
+            <div class="mt-5 px-5">
+                <div class="text-[11px] font-semibold uppercase tracking-[.14em] text-slate-500">当前会话</div>
+                <button id="current-session-card" class="mt-2 w-full rounded-xl border border-white/10 bg-white/[.06] p-3 text-left transition hover:bg-white/10">
+                    <div class="flex items-center gap-2 text-sm font-medium"><i class="fa fa-comments-o text-sky-300"></i><span>智能任务会话</span></div>
+                    <div id="current-thread-id" class="mt-2 truncate font-mono text-[10px] text-slate-400"></div>
+                </button>
+            </div>
+
+            <div class="mt-6 min-h-0 flex flex-1 flex-col px-5">
+                <div class="flex shrink-0 items-center justify-between gap-2">
+                    <span class="text-[11px] font-semibold uppercase tracking-[.14em] text-slate-500">最近会话</span>
+                    <div class="flex items-center gap-2">
+                        <span id="history-count" class="text-[10px] text-slate-500">0</span>
+                        <button id="clear-all-sessions" type="button" class="rounded-md border border-rose-400/30 px-2 py-1 text-[10px] font-medium text-rose-300 transition hover:border-rose-300/60 hover:bg-rose-500/10 disabled:cursor-not-allowed disabled:opacity-40" aria-label="清空全部会话">清空全部</button>
+                    </div>
+                </div>
+                <div id="session-history" class="mt-2 min-h-0 flex-1 space-y-1 overflow-y-auto overscroll-contain pr-1"></div>
+            </div>
+
+            <div class="m-4 rounded-xl border border-white/10 bg-white/[.05] p-3">
+                <div id="connection-status" class="flex items-center gap-2 text-xs text-slate-300" role="status" aria-live="polite">
+                    <span class="h-2 w-2 rounded-full bg-amber-400 pulse-dot"></span><span>正在连接实时通道</span>
+                </div>
+                <div class="mt-2 text-[10px] leading-4 text-slate-500">任务通过加密会话 ID 隔离，执行进度将实时推送。</div>
+            </div>
+        </aside>
+
+        <main class="flex min-w-0 flex-1 flex-col bg-white">
+            <header class="flex h-16 shrink-0 items-center border-b border-slate-200 bg-white px-4 md:px-6">
+                <button data-open-drawer="session-sidebar" class="mr-3 rounded-xl border border-slate-200 p-2.5 text-slate-600 hover:bg-slate-50 md:hidden" aria-label="打开会话栏"><i class="fa fa-bars"></i></button>
+                <div class="min-w-0"><h1 class="truncate text-base font-bold text-ocean-900">多智能体协作工作台</h1><p id="task-status-text" class="text-xs text-slate-500">告诉智能团队你想完成的任务</p></div>
+                <div class="ml-auto flex items-center gap-2">
+                    <span id="header-connection-badge" class="hidden items-center gap-1.5 rounded-full bg-amber-50 px-3 py-1.5 text-xs font-medium text-amber-700 sm:flex"><span class="h-1.5 w-1.5 rounded-full bg-amber-500"></span>连接中</span>
+                    <button data-open-drawer="collaboration-panel" class="rounded-xl border border-slate-200 p-2.5 text-slate-600 hover:bg-slate-50 xl:hidden" aria-label="打开协作面板"><i class="fa fa-sliders"></i></button>
+                </div>
+            </header>
+
+            <section id="chat-messages" class="min-h-0 flex-1 overflow-y-auto bg-gradient-to-b from-white to-slate-50 px-4 py-6 md:px-8" aria-live="polite">
+                <div id="welcome-panel" class="mx-auto flex min-h-full max-w-3xl flex-col items-center justify-center py-10 text-center">
+                    <div class="relative grid h-20 w-20 place-items-center rounded-[26px] bg-ocean-900 text-white shadow-xl shadow-ocean-900/20">
+                        <i class="fa fa-sitemap text-3xl" aria-hidden="true"></i><span class="absolute -right-1 -top-1 h-5 w-5 rounded-full border-4 border-white bg-emerald-400"></span>
+                    </div>
+                    <h2 class="mt-6 text-2xl font-bold tracking-tight text-ocean-900 md:text-3xl">今天想让智能团队完成什么？</h2>
+                    <p class="mt-3 max-w-xl text-sm leading-6 text-slate-500">主智能体会协调网络搜索、企业数据库和 RAGFlow 知识库助手，为你完成检索、分析与文件生成。</p>
+                    <div class="mt-8 grid w-full gap-3 sm:grid-cols-3">
+                        <button class="example-prompt rounded-2xl border border-slate-200 bg-white p-4 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-sky-300 hover:shadow-md" data-prompt="查询企业知识库中的空调漏水处理方法，并给出完整建议">
+                            <i class="fa fa-book rounded-lg bg-sky-50 p-2 text-sky-600"></i><div class="mt-3 text-sm font-semibold text-slate-800">查询内部知识</div><p class="mt-1 text-xs leading-5 text-slate-500">调用 RAGFlow 助手检索专业资料</p>
+                        </button>
+                        <button class="example-prompt rounded-2xl border border-slate-200 bg-white p-4 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-sky-300 hover:shadow-md" data-prompt="结合网络资料和内部数据，分析近期空调产品的销售趋势">
+                            <i class="fa fa-line-chart rounded-lg bg-emerald-50 p-2 text-emerald-600"></i><div class="mt-3 text-sm font-semibold text-slate-800">多源数据分析</div><p class="mt-1 text-xs leading-5 text-slate-500">协调网络与数据库助手</p>
+                        </button>
+                        <button class="example-prompt rounded-2xl border border-slate-200 bg-white p-4 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-sky-300 hover:shadow-md" data-prompt="检索相关资料并生成一份不少于1000字的 PDF 分析报告">
+                            <i class="fa fa-file-pdf-o rounded-lg bg-rose-50 p-2 text-rose-600"></i><div class="mt-3 text-sm font-semibold text-slate-800">生成专业报告</div><p class="mt-1 text-xs leading-5 text-slate-500">检索后生成 Markdown 与 PDF</p>
+                        </button>
+                    </div>
+                </div>
+            </section>
+
+            <div class="shrink-0 border-t border-slate-200 bg-white px-4 pt-3 shadow-[0_-10px_30px_rgba(15,23,42,.035)] md:px-8">
+                <div class="mx-auto max-w-4xl">
+                    <div id="selected-files" class="mb-2 hidden flex-wrap gap-2"></div>
+                    <div id="inline-notice" class="mb-2 hidden rounded-lg px-3 py-2 text-xs" role="alert"></div>
+                    <form id="task-form" class="relative rounded-2xl border border-slate-300 bg-white p-2 shadow-panel transition focus-within:border-sky-400 focus-within:ring-4 focus-within:ring-sky-100">
+                        <textarea id="task-input" rows="1" maxlength="8000" class="max-h-36 min-h-[48px] w-full resize-none border-0 bg-transparent px-3 py-3 pr-24 text-sm leading-6 text-slate-800 outline-none placeholder:text-slate-400" placeholder="给智能团队发送任务，Shift + Enter 换行…" aria-label="任务内容"></textarea>
+                        <div class="absolute bottom-3 right-3 flex items-center gap-1">
+                            <input id="file-input" type="file" multiple class="hidden" aria-label="选择上传文件">
+                            <button id="attach-button" type="button" class="grid h-9 w-9 place-items-center rounded-xl text-slate-500 transition hover:bg-slate-100 hover:text-ocean-700" aria-label="添加文件" title="添加文件"><i class="fa fa-paperclip"></i></button>
+                            <button id="send-button" type="submit" class="grid h-9 w-9 place-items-center rounded-xl bg-ocean-600 text-white shadow-md shadow-sky-900/15 transition hover:bg-ocean-700 disabled:cursor-not-allowed disabled:bg-slate-300" aria-label="发送任务" title="发送任务"><i class="fa fa-paper-plane"></i></button>
+                        </div>
+                    </form>
+                    <p class="safe-area-bottom pt-2 text-center text-[10px] text-slate-400">智能体可能产生不准确内容，请核对关键业务信息</p>
+                </div>
+            </div>
+        </main>
+
+        <aside id="collaboration-panel" class="hidden w-[330px] shrink-0 flex-col border-l border-slate-200 bg-slate-50 xl:flex">
+            <div class="flex h-16 shrink-0 items-center border-b border-slate-200 bg-white px-5">
+                <div><div class="text-sm font-bold text-ocean-900">协作详情</div><div class="text-[11px] text-slate-500">实时查看执行过程</div></div>
+                <button data-close-drawer="collaboration-panel" class="ml-auto rounded-lg p-2 text-slate-500 hover:bg-slate-100 xl:hidden" aria-label="关闭协作面板"><i class="fa fa-times"></i></button>
+            </div>
+            <div class="min-h-0 flex-1 overflow-y-auto p-4">
+                <section class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+                    <div class="flex items-center justify-between"><h2 class="text-sm font-bold text-slate-800">智能体团队</h2><span id="active-agent-count" class="rounded-full bg-slate-100 px-2 py-1 text-[10px] font-medium text-slate-500">0 活跃</span></div>
+                    <div id="agent-status-list" class="mt-3 space-y-2">
+                        <div class="agent-item flex items-center gap-3 rounded-xl bg-slate-50 p-3" data-agent="主智能体"><span class="grid h-9 w-9 place-items-center rounded-xl bg-ocean-100 text-ocean-700"><i class="fa fa-sitemap"></i></span><div class="min-w-0 flex-1"><div class="text-xs font-semibold">主智能体</div><div class="agent-state mt-0.5 text-[10px] text-slate-400">等待任务</div></div><span class="agent-dot h-2 w-2 rounded-full bg-slate-300"></span></div>
+                        <div class="agent-item flex items-center gap-3 rounded-xl bg-slate-50 p-3" data-agent="网络搜索助手"><span class="grid h-9 w-9 place-items-center rounded-xl bg-sky-50 text-sky-600"><i class="fa fa-globe"></i></span><div class="min-w-0 flex-1"><div class="text-xs font-semibold">网络搜索助手</div><div class="agent-state mt-0.5 text-[10px] text-slate-400">等待调用</div></div><span class="agent-dot h-2 w-2 rounded-full bg-slate-300"></span></div>
+                        <div class="agent-item flex items-center gap-3 rounded-xl bg-slate-50 p-3" data-agent="数据库查询助手"><span class="grid h-9 w-9 place-items-center rounded-xl bg-violet-50 text-violet-600"><i class="fa fa-database"></i></span><div class="min-w-0 flex-1"><div class="text-xs font-semibold">数据库查询助手</div><div class="agent-state mt-0.5 text-[10px] text-slate-400">等待调用</div></div><span class="agent-dot h-2 w-2 rounded-full bg-slate-300"></span></div>
+                        <div class="agent-item flex items-center gap-3 rounded-xl bg-slate-50 p-3" data-agent="RAGFlow助手"><span class="grid h-9 w-9 place-items-center rounded-xl bg-emerald-50 text-emerald-600"><i class="fa fa-book"></i></span><div class="min-w-0 flex-1"><div class="text-xs font-semibold">RAGFlow 助手</div><div class="agent-state mt-0.5 text-[10px] text-slate-400">等待调用</div></div><span class="agent-dot h-2 w-2 rounded-full bg-slate-300"></span></div>
+                    </div>
+                </section>
+
+                <section class="mt-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+                    <div class="flex items-center justify-between"><h2 class="text-sm font-bold text-slate-800">执行时间线</h2><button id="clear-timeline" class="text-[10px] font-medium text-slate-400 hover:text-ocean-600" aria-label="清空时间线">清空</button></div>
+                    <div id="execution-timeline" class="mt-4 space-y-4"><div id="timeline-empty" class="py-5 text-center text-xs text-slate-400"><i class="fa fa-clock-o mb-2 block text-xl text-slate-300"></i>任务事件将在这里实时显示</div></div>
+                </section>
+
+                <section class="mt-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+                    <div class="flex items-center justify-between"><h2 class="text-sm font-bold text-slate-800">生成文件</h2><button id="refresh-files" class="grid h-7 w-7 place-items-center rounded-lg text-slate-400 hover:bg-slate-100 hover:text-ocean-600" aria-label="刷新文件列表" title="刷新文件列表"><i class="fa fa-refresh"></i></button></div>
+                    <div id="generated-files" class="mt-3 space-y-2"><div id="files-empty" class="rounded-xl border border-dashed border-slate-200 px-3 py-6 text-center text-xs text-slate-400"><i class="fa fa-folder-open-o mb-2 block text-xl text-slate-300"></i>暂时没有生成文件</div></div>
+                </section>
+            </div>
+        </aside>
+    </div>
+
+    <script>
+        'use strict';
+
+        const $ = (selector, root = document) => root.querySelector(selector);
+        const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
+        const API = {
+            sessions: '/api/sessions',
+            session: sessionId => `/api/sessions/${sessionId}`,
+            task: sessionId => `/api/sessions/${sessionId}/tasks`,
+            upload: sessionId => `/api/sessions/${sessionId}/upload`,
+            artifacts: sessionId => `/api/sessions/${sessionId}/artifacts`,
+            download: artifactId => `/api/artifacts/${artifactId}/download`,
+            websocket: '/api/ws/runtime/'
+        };
+
+        const Utils = {
+            uuid() {
+                return crypto.randomUUID ? crypto.randomUUID() : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+                    const r = Math.random() * 16 | 0;
+                    return (c === 'x' ? r : (r & 3 | 8)).toString(16);
+                });
+            },
+            time(value = Date.now()) { return new Date(value).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }); },
+            date(value) { return new Date(value).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }); },
+            fileSize(bytes = 0) { if (!bytes) return '0 B'; const units = ['B', 'KB', 'MB', 'GB']; const i = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1); return `${(bytes / 1024 ** i).toFixed(i ? 1 : 0)} ${units[i]}`; },
+            async fetchWithTimeout(url, options = {}, timeout = 30000) {
+                const controller = new AbortController();
+                const timer = setTimeout(() => controller.abort(), timeout);
+                try { return await fetch(url, { ...options, signal: controller.signal }); }
+                finally { clearTimeout(timer); }
+            },
+            setText(element, value) { element.textContent = value == null ? '' : String(value); }
+        };
+
+        const UIState = {
+            notice(message, type = 'info') {
+                const notice = $('#inline-notice');
+                const styles = { info: 'bg-sky-50 text-sky-700', success: 'bg-emerald-50 text-emerald-700', error: 'bg-rose-50 text-rose-700', warning: 'bg-amber-50 text-amber-700' };
+                notice.className = `mb-2 rounded-lg px-3 py-2 text-xs ${styles[type] || styles.info}`;
+                Utils.setText(notice, message);
+                notice.classList.remove('hidden');
+                clearTimeout(this.noticeTimer);
+                this.noticeTimer = setTimeout(() => notice.classList.add('hidden'), 5000);
+            },
+            taskBusy(busy, text = '') {
+                $('#send-button').disabled = busy;
+                $('#task-input').disabled = busy;
+                $('#task-status-text').textContent = busy ? (text || '智能团队正在执行任务…') : '告诉智能团队你想完成的任务';
+                AgentView.set('主智能体', busy ? 'active' : 'idle', busy ? '正在协调团队' : '等待任务');
+            },
+            openDrawer(id) { document.getElementById(id).classList.add('drawer-open'); $('#mobile-overlay').classList.remove('hidden'); },
+            closeDrawers() { $$('.drawer-open').forEach(el => el.classList.remove('drawer-open')); $('#mobile-overlay').classList.add('hidden'); }
+        };
+
+        const SessionManager = {
+            sessions: [], current: null, deletingAll: false,
+            async init() {
+                try {
+                    const response = await Utils.fetchWithTimeout(API.sessions);
+                    const data = await response.json();
+                    if (!response.ok) throw new Error(data.detail || '会话列表读取失败');
+                    this.sessions = (data.sessions || []).map(item => ({ id: item.session_id, title: item.title, createdAt: item.created_at }));
+                } catch (error) { UIState.notice(error.message, 'error'); this.sessions = []; }
+                const saved = localStorage.getItem('deepagents.current');
+                if (!this.sessions.length) await this.create();
+                else this.select(saved && this.sessions.some(item => item.id === saved) ? saved : this.sessions[0].id, false);
+            },
+            async create() {
+                try {
+                    const response = await Utils.fetchWithTimeout(API.sessions, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title: '新会话' }) });
+                    const data = await response.json();
+                    if (!response.ok) throw new Error(data.detail || '创建会话失败');
+                    this.sessions.unshift({ id: data.session_id, title: data.title, createdAt: data.created_at });
+                    this.select(data.session_id, true);
+                } catch (error) { UIState.notice(error.message, 'error'); }
+            },
+            async delete(id) {
+                const session = this.sessions.find(item => item.id === id);
+                if (!session || !window.confirm(`确定删除会话“${session.title}”吗？此操作无法撤销。`)) return;
+                try {
+                    const response = await Utils.fetchWithTimeout(
+                        API.session(id),
+                        { method: 'DELETE' }
+                    );
+                    if (!response.ok) {
+                        let detail = '';
+                        try { detail = (await response.json()).detail || ''; } catch {}
+                        if (response.status === 409) detail = '会话仍在运行，请等待任务结束后再删除';
+                        throw new Error(detail || '删除会话失败');
+                    }
+
+                    const deletingCurrent = this.current?.id === id;
+                    if (deletingCurrent) {
+                        WebSocketClient.disconnect();
+                        ChatController.reset();
+                        UIState.taskBusy(false);
+                        this.current = null;
+                    }
+                    localStorage.removeItem(`deepagents.event.${id}`);
+                    this.sessions = this.sessions.filter(item => item.id !== id);
+                    UIState.notice('会话已删除', 'success');
+
+                    if (deletingCurrent) {
+                        if (this.sessions.length) this.select(this.sessions[0].id, true);
+                        else await this.create();
+                    } else {
+                        this.render();
+                    }
+                } catch (error) {
+                    UIState.notice(error.message, 'error');
+                }
+            },
+            async deleteAll() {
+                if (!this.sessions.length || this.deletingAll) return;
+                if (!window.confirm('所有空闲会话及生成文件将永久删除；正在运行或恢复中的会话会保留。此操作无法撤销，是否继续？')) return;
+                this.deletingAll = true;
+                this.render();
+                try {
+                    const response = await Utils.fetchWithTimeout(
+                        API.sessions,
+                        { method: 'DELETE' },
+                        120000
+                    );
+                    const data = await response.json();
+                    if (!response.ok) throw new Error(data.detail || '清空会话失败');
+
+                    const deletedIds = new Set(data.deleted_session_ids || []);
+                    const currentDeleted = this.current && deletedIds.has(this.current.id);
+                    if (currentDeleted) {
+                        WebSocketClient.disconnect();
+                        ChatController.reset();
+                        UIState.taskBusy(false);
+                        this.current = null;
+                    }
+                    deletedIds.forEach(id => localStorage.removeItem(`deepagents.event.${id}`));
+                    this.sessions = this.sessions.filter(item => !deletedIds.has(item.id));
+
+                    const retained = Number(data.retained_count || 0);
+                    const failed = (data.failed_session_ids || []).length;
+                    const suffix = failed ? `，${failed} 个删除失败` : '';
+                    UIState.notice(`已删除 ${deletedIds.size} 个，保留 ${retained} 个运行中会话${suffix}`, failed ? 'warning' : 'success');
+
+                    if (currentDeleted) {
+                        if (this.sessions.length) this.select(this.sessions[0].id, true);
+                        else await this.create();
+                    } else if (!this.sessions.length) {
+                        await this.create();
+                    } else {
+                        this.render();
+                    }
+                } catch (error) {
+                    UIState.notice(error.message, 'error');
+                } finally {
+                    this.deletingAll = false;
+                    this.render();
+                }
+            },
+            select(id, clearChat = true) {
+                this.current = this.sessions.find(item => item.id === id);
+                if (!this.current) return;
+                localStorage.setItem('deepagents.current', id);
+                this.render();
+                if (clearChat) ChatController.reset();
+                WebSocketClient.connect(id);
+                FileController.refresh();
+            },
+            update(patch) { Object.assign(this.current, patch); this.render(); },
+            render() {
+                const currentId = this.current?.id;
+                Utils.setText($('#current-thread-id'), currentId || '');
+                Utils.setText($('#history-count'), this.sessions.length);
+                const clearAll = $('#clear-all-sessions');
+                clearAll.disabled = this.deletingAll || !this.sessions.length;
+                clearAll.textContent = this.deletingAll ? '清理中…' : '清空全部';
+                const history = $('#session-history'); history.replaceChildren();
+                this.sessions.forEach(session => {
+                    const row = document.createElement('div');
+                    row.className = `group flex w-full items-center rounded-lg transition ${session.id === currentId ? 'bg-white/10' : 'hover:bg-white/[.06]'}`;
+                    const button = document.createElement('button');
+                    button.className = `min-w-0 flex-1 px-3 py-2.5 text-left text-xs ${session.id === currentId ? 'text-white' : 'text-slate-400 hover:text-slate-200'}`;
+                    button.addEventListener('click', () => this.select(session.id, true));
+                    const title = document.createElement('div'); title.className = 'truncate font-medium'; Utils.setText(title, session.title);
+                    const date = document.createElement('div'); date.className = 'mt-1 text-[9px] text-slate-500'; Utils.setText(date, Utils.date(session.createdAt));
+                    const remove = document.createElement('button');
+                    remove.type = 'button';
+                    remove.className = 'mr-2 grid h-7 w-7 shrink-0 place-items-center rounded-md text-slate-500 opacity-70 hover:bg-rose-500/15 hover:text-rose-300 group-hover:opacity-100';
+                    remove.setAttribute('aria-label', `删除会话 ${session.title}`);
+                    remove.title = '删除会话';
+                    remove.innerHTML = '<i class="fa fa-trash-o"></i>';
+                    remove.addEventListener('click', event => {
+                        event.stopPropagation();
+                        this.delete(session.id);
+                    });
+                    button.append(title, date);
+                    row.append(button, remove);
+                    history.append(row);
+                });
+            }
+        };
+
+        const WebSocketClient = {
+            socket: null, heartbeat: null, reconnectTimer: null, attempt: 0, manualClose: false, lastEventId: 0,
+            connect(threadId) {
+                this.disconnect(); this.manualClose = false;
+                this.lastEventId = Number(localStorage.getItem(`deepagents.event.${threadId}`) || 0);
+                const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+                this.setStatus('connecting');
+                this.socket = new WebSocket(`${protocol}//${location.host}${API.websocket}${threadId}?after=${this.lastEventId}`);
+                this.socket.addEventListener('open', () => { this.attempt = 0; this.setStatus('online'); this.heartbeat = setInterval(() => this.sendPing(), 25000); });
+                this.socket.addEventListener('message', event => {
+                    try {
+                        const payload = JSON.parse(event.data);
+                        if (payload.event_id) {
+                            if (payload.event_id <= this.lastEventId) return;
+                            this.lastEventId = payload.event_id;
+                            localStorage.setItem(`deepagents.event.${threadId}`, String(this.lastEventId));
+                        }
+                        EventRenderer.handle(payload);
+                    } catch { EventRenderer.add('收到无法解析的实时消息', 'warning'); }
+                });
+                this.socket.addEventListener('close', () => { clearInterval(this.heartbeat); if (!this.manualClose) this.scheduleReconnect(threadId); });
+                this.socket.addEventListener('error', () => this.setStatus('offline'));
+            },
+            disconnect() { this.manualClose = true; clearInterval(this.heartbeat); clearTimeout(this.reconnectTimer); if (this.socket) this.socket.close(); },
+            sendPing() { if (this.socket?.readyState === WebSocket.OPEN) this.socket.send('ping'); },
+            scheduleReconnect(threadId) { this.setStatus('reconnecting'); const delay = Math.min(1000 * 2 ** this.attempt++, 15000); this.reconnectTimer = setTimeout(() => this.connect(threadId), delay); },
+            setStatus(status) {
+                const states = {
+                    online: ['bg-emerald-400', '实时通道已连接', 'bg-emerald-50 text-emerald-700', '在线'],
+                    connecting: ['bg-amber-400 pulse-dot', '正在连接实时通道', 'bg-amber-50 text-amber-700', '连接中'],
+                    reconnecting: ['bg-amber-400 pulse-dot', '连接中断，正在重连', 'bg-amber-50 text-amber-700', '重连中'],
+                    offline: ['bg-rose-400', '实时通道不可用', 'bg-rose-50 text-rose-700', '离线']
+                };
+                const state = states[status] || states.offline;
+                const node = $('#connection-status'); node.replaceChildren();
+                const dot = document.createElement('span'); dot.className = `h-2 w-2 rounded-full ${state[0]}`;
+                const label = document.createElement('span'); Utils.setText(label, state[1]); node.append(dot, label);
+                const badge = $('#header-connection-badge'); badge.className = `hidden items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium sm:flex ${state[2]}`;
+                badge.replaceChildren(); const smallDot = document.createElement('span'); smallDot.className = `h-1.5 w-1.5 rounded-full ${state[0].split(' ')[0]}`; const text = document.createTextNode(state[3]); badge.append(smallDot, text);
+            }
+        };
+
+        const AgentView = {
+            set(name, status, description) {
+                const normalized = name?.replace(/\s/g, '') || '';
+                const item = $$('.agent-item').find(node => normalized.includes(node.dataset.agent.replace(/\s/g, '')) || node.dataset.agent.replace(/\s/g, '').includes(normalized));
+                if (!item) return;
+                const dot = $('.agent-dot', item); const state = $('.agent-state', item);
+                dot.className = `agent-dot h-2 w-2 rounded-full ${status === 'active' ? 'bg-emerald-400 pulse-dot' : status === 'done' ? 'bg-sky-500' : status === 'error' ? 'bg-rose-500' : 'bg-slate-300'}`;
+                item.classList.toggle('ring-2', status === 'active'); item.classList.toggle('ring-sky-100', status === 'active');
+                Utils.setText(state, description || (status === 'active' ? '执行中' : '等待调用'));
+                Utils.setText($('#active-agent-count'), `${$$('.agent-dot.bg-emerald-400').length} 活跃`);
+            },
+            reset() { $$('.agent-item').forEach(item => this.set(item.dataset.agent, 'idle', item.dataset.agent === '主智能体' ? '等待任务' : '等待调用')); }
+        };
+
+        const EventRenderer = {
+            handle(payload) {
+                const type = payload.event || payload.type;
+                const data = payload.payload || payload.data || {};
+                if (type === 'assistant_call') { AgentView.set(data.agent_id || data.assistant_name || payload.message, 'active', data.description || '正在执行'); this.add(payload.message || `正在调用 ${data.description || data.agent_id || '子智能体'}`, 'assistant'); ChatController.addSystem(payload.message || '正在调用子智能体'); }
+                else if (type === 'tool_start' || type === 'tool_started') { this.add(payload.message || `正在执行工具：${data.tool_name || ''}`, 'tool'); ChatController.addSystem(payload.message || '正在执行工具'); }
+                else if (type === 'session_created') { this.add('任务工作目录已创建', 'success'); FileController.refresh(); }
+                else if (type === 'task_result' || type === 'run_completed') { ChatController.finish(data.result || payload.result || payload.message || '任务已完成'); this.add('任务执行完成', 'success'); AgentView.set('主智能体', 'done', '任务完成'); FileController.refresh(); }
+                else if (type === 'error' || type === 'run_failed') { ChatController.fail(payload.message || data.message || data.error || '任务执行失败'); this.add(payload.message || '任务执行失败', 'error'); AgentView.set('主智能体', 'error', '执行失败'); }
+                else if (type === 'pong') { WebSocketClient.setStatus('online'); }
+            },
+            add(message, kind = 'info') {
+                $('#timeline-empty')?.remove();
+                const colors = { assistant: 'bg-violet-500', tool: 'bg-sky-500', success: 'bg-emerald-500', error: 'bg-rose-500', warning: 'bg-amber-500', info: 'bg-slate-400' };
+                const item = document.createElement('div'); item.className = 'timeline-line relative flex gap-3';
+                const dot = document.createElement('span'); dot.className = `relative z-10 mt-1 h-3 w-3 shrink-0 rounded-full border-2 border-white ${colors[kind] || colors.info}`;
+                const body = document.createElement('div'); body.className = 'min-w-0';
+                const text = document.createElement('div'); text.className = 'text-xs leading-5 text-slate-700'; Utils.setText(text, message);
+                const time = document.createElement('div'); time.className = 'mt-0.5 text-[9px] text-slate-400'; Utils.setText(time, Utils.time());
+                body.append(text, time); item.append(dot, body); $('#execution-timeline').prepend(item);
+            },
+            clear() { $('#execution-timeline').replaceChildren(); const empty = document.createElement('div'); empty.id = 'timeline-empty'; empty.className = 'py-5 text-center text-xs text-slate-400'; Utils.setText(empty, '任务事件将在这里实时显示'); $('#execution-timeline').append(empty); }
+        };
+
+        const ChatController = {
+            busy: false, pendingNode: null,
+            reset() {
+                const messages = $('#chat-messages');
+                [...messages.children].forEach(child => { if (child.id !== 'welcome-panel') child.remove(); });
+                $('#welcome-panel')?.classList.remove('hidden');
+                this.busy = false; UIState.taskBusy(false); AgentView.reset(); EventRenderer.clear();
+            },
+            ensureConversation() { $('#welcome-panel')?.classList.add('hidden'); },
+            addMessage(role, content) {
+                this.ensureConversation();
+                const wrapper = document.createElement('div'); wrapper.className = `mx-auto mb-6 flex max-w-3xl gap-3 ${role === 'user' ? 'flex-row-reverse' : ''}`;
+                const avatar = document.createElement('div'); avatar.className = `grid h-9 w-9 shrink-0 place-items-center rounded-xl ${role === 'user' ? 'bg-slate-200 text-slate-600' : 'bg-ocean-900 text-white'}`; avatar.innerHTML = `<i class="fa ${role === 'user' ? 'fa-user' : 'fa-sitemap'}" aria-hidden="true"></i>`;
+                const column = document.createElement('div'); column.className = `min-w-0 max-w-[85%] ${role === 'user' ? 'text-right' : ''}`;
+                const label = document.createElement('div'); label.className = 'mb-1 text-[10px] font-medium text-slate-400'; Utils.setText(label, role === 'user' ? '你' : '智能团队');
+                const bubble = document.createElement('div'); bubble.className = `message-text inline-block rounded-2xl px-4 py-3 text-left text-sm leading-6 ${role === 'user' ? 'rounded-tr-md bg-ocean-600 text-white' : 'rounded-tl-md border border-slate-200 bg-white text-slate-700 shadow-sm'}`; Utils.setText(bubble, content);
+                column.append(label, bubble); wrapper.append(avatar, column); $('#chat-messages').append(wrapper); this.scroll(); return bubble;
+            },
+            addSystem(content) { this.ensureConversation(); const node = document.createElement('div'); node.className = 'mx-auto mb-3 flex max-w-3xl items-center gap-2 text-[11px] text-slate-400'; const line = document.createElement('span'); line.className = 'h-px flex-1 bg-slate-200'; const text = document.createElement('span'); Utils.setText(text, content); node.append(line.cloneNode(), text, line); $('#chat-messages').append(node); this.scroll(); },
+            addPending() { this.pendingNode = this.addMessage('assistant', '正在协调专家助手，请稍候…'); this.pendingNode.classList.add('text-slate-500'); },
+            finish(result) { this.pendingNode?.closest('.mx-auto')?.remove(); this.pendingNode = null; this.addMessage('assistant', result); this.busy = false; UIState.taskBusy(false); },
+            fail(message) { this.pendingNode?.closest('.mx-auto')?.remove(); this.pendingNode = null; this.addMessage('assistant', `任务执行失败：${message}`); this.busy = false; UIState.taskBusy(false); UIState.notice(message, 'error'); },
+            scroll() { requestAnimationFrame(() => { const box = $('#chat-messages'); box.scrollTop = box.scrollHeight; }); },
+            async submit(query) {
+                query = query.trim(); if (!query || this.busy) return;
+                this.busy = true; this.addMessage('user', query); this.addPending(); UIState.taskBusy(true); EventRenderer.add('任务已提交，等待智能团队处理', 'info');
+                if (SessionManager.current.title === '新会话') SessionManager.update({ title: query.slice(0, 24) });
+                try {
+                    const response = await Utils.fetchWithTimeout(API.task(SessionManager.current.id), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ query }) });
+                    const data = await response.json();
+                    if (!response.ok || data.error) throw new Error(data.detail || data.error || `请求失败（${response.status}）`);
+                    EventRenderer.add(`任务已开始 · ${data.task_id}`, 'success');
+                } catch (error) { this.fail(error.name === 'AbortError' ? '提交超时，请检查服务状态' : error.message); }
+            }
+        };
+
+        const UploadController = {
+            files: [], uploading: false,
+            choose(fileList) { this.files = [...fileList]; this.render(); },
+            render() {
+                const box = $('#selected-files'); box.replaceChildren(); box.classList.toggle('hidden', !this.files.length); box.classList.toggle('flex', !!this.files.length);
+                this.files.forEach((file, index) => {
+                    const chip = document.createElement('div'); chip.className = 'flex items-center gap-2 rounded-lg bg-slate-100 px-3 py-2 text-xs text-slate-600';
+                    const name = document.createElement('span'); name.className = 'max-w-40 truncate'; Utils.setText(name, file.name);
+                    const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'text-slate-400 hover:text-rose-500'; remove.setAttribute('aria-label', `移除 ${file.name}`); remove.innerHTML = '<i class="fa fa-times"></i>'; remove.addEventListener('click', () => { this.files.splice(index, 1); this.render(); });
+                    chip.append(document.createTextNode('📎'), name, remove); box.append(chip);
+                });
+            },
+            async upload() {
+                if (!this.files.length) return true; if (this.uploading) return false;
+                this.uploading = true; UIState.notice(`正在上传 ${this.files.length} 个文件…`, 'info');
+                const formData = new FormData(); this.files.forEach(file => formData.append('files', file));
+                try {
+                    const response = await Utils.fetchWithTimeout(API.upload(SessionManager.current.id), { method: 'POST', body: formData }, 60000); const data = await response.json();
+                    if (!response.ok || data.error) throw new Error(data.detail || data.error || '文件上传失败');
+                    UIState.notice(`已上传：${(data.files || []).map(file => file.name).join('、')}`, 'success'); EventRenderer.add(`已上传 ${data.files?.length || this.files.length} 个文件`, 'success'); this.files = []; this.render(); return true;
+                } catch (error) { UIState.notice(error.name === 'AbortError' ? '上传超时，可保留文件后重试' : error.message, 'error'); return false; }
+                finally { this.uploading = false; }
+            }
+        };
+
+        const FileController = {
+            async refresh() {
+                const sessionId = SessionManager.current?.id; if (!sessionId) return this.render([]);
+                $('#refresh-files i').classList.add('fa-spin');
+                try {
+                    const response = await Utils.fetchWithTimeout(API.artifacts(sessionId), {}, 15000); const data = await response.json();
+                    if (!response.ok || data.error) throw new Error(data.detail || data.error || '文件列表读取失败'); this.render(data.artifacts || []);
+                } catch (error) { this.render([], error.message); }
+                finally { $('#refresh-files i').classList.remove('fa-spin'); }
+            },
+            render(files, error = '') {
+                const box = $('#generated-files'); box.replaceChildren();
+                if (!files.length) { const empty = document.createElement('div'); empty.id = 'files-empty'; empty.className = `rounded-xl border border-dashed px-3 py-6 text-center text-xs ${error ? 'border-rose-200 text-rose-500' : 'border-slate-200 text-slate-400'}`; Utils.setText(empty, error || '暂时没有生成文件'); box.append(empty); return; }
+                files.forEach(file => {
+                    const card = document.createElement('div'); card.className = 'flex items-center gap-3 rounded-xl border border-slate-200 p-3 transition hover:border-sky-300 hover:bg-sky-50/30';
+                    const icon = document.createElement('span'); icon.className = 'grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-sky-50 text-sky-600'; icon.innerHTML = '<i class="fa fa-file-o"></i>';
+                    const meta = document.createElement('div'); meta.className = 'min-w-0 flex-1'; const name = document.createElement('div'); name.className = 'truncate text-xs font-semibold text-slate-700'; Utils.setText(name, file.name); const details = document.createElement('div'); details.className = 'mt-1 text-[9px] text-slate-400'; Utils.setText(details, `${Utils.fileSize(file.size)} · ${Utils.date(file.created_at)}`); meta.append(name, details);
+                    const link = document.createElement('a'); link.className = 'grid h-8 w-8 place-items-center rounded-lg text-slate-400 hover:bg-white hover:text-ocean-600'; link.href = API.download(file.artifact_id); link.setAttribute('download', file.name); link.setAttribute('aria-label', `下载 ${file.name}`); link.innerHTML = '<i class="fa fa-download"></i>'; card.append(icon, meta, link); box.append(card);
+                });
+            }
+        };
+
+        function bindEvents() {
+            $('#new-session-button').addEventListener('click', () => { SessionManager.create(); UIState.closeDrawers(); $('#task-input').focus(); });
+            $('#clear-all-sessions').addEventListener('click', () => SessionManager.deleteAll());
+            $('#task-form').addEventListener('submit', async event => { event.preventDefault(); const input = $('#task-input'); const query = input.value; if (!query.trim()) return UIState.notice('请输入任务内容', 'warning'); const uploaded = await UploadController.upload(); if (!uploaded) return; input.value = ''; input.style.height = 'auto'; ChatController.submit(query); });
+            $('#task-input').addEventListener('keydown', event => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); $('#task-form').requestSubmit(); } });
+            $('#task-input').addEventListener('input', event => { event.target.style.height = 'auto'; event.target.style.height = `${Math.min(event.target.scrollHeight, 144)}px`; });
+            $('#attach-button').addEventListener('click', () => $('#file-input').click());
+            $('#file-input').addEventListener('change', event => UploadController.choose(event.target.files));
+            $('#refresh-files').addEventListener('click', () => FileController.refresh());
+            $('#clear-timeline').addEventListener('click', () => EventRenderer.clear());
+            $$('.example-prompt').forEach(button => button.addEventListener('click', () => { $('#task-input').value = button.dataset.prompt; $('#task-input').focus(); }));
+            $$('[data-open-drawer]').forEach(button => button.addEventListener('click', () => UIState.openDrawer(button.dataset.openDrawer)));
+            $$('[data-close-drawer]').forEach(button => button.addEventListener('click', UIState.closeDrawers));
+            $('#mobile-overlay').addEventListener('click', UIState.closeDrawers);
+            document.addEventListener('keydown', event => { if (event.key === 'Escape') UIState.closeDrawers(); });
+            window.addEventListener('beforeunload', () => WebSocketClient.disconnect());
+        }
+
+        bindEvents();
+        SessionManager.init();
+        $('#task-input').focus();
+    </script>
+</body>
+</html>
