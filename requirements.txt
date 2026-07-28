@@ -1,0 +1,21 @@
+deepagents==0.4.3
+fastapi==0.129.2
+langchain==1.2.10
+langchain-core==1.2.14
+langchain-openai==1.1.10
+langgraph==1.0.9
+Markdown==3.10.2
+mysql-connector-python==9.6.0
+openpyxl==3.1.5
+pandas==3.0.1
+pydantic==2.12.5
+pypdf==6.7.2
+python-docx==1.2.0
+python-dotenv==1.2.1
+python-multipart==0.0.22
+pywin32==311; platform_system == "Windows"
+PyYAML==6.0.3
+ragflow-sdk==0.24.0
+reportlab==4.4.10
+tavily-python==0.7.21
+uvicorn[standard]==0.41.0
